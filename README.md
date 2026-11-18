@@ -98,7 +98,7 @@ Core (M0–M4, 60đ) chứng minh gate chặn được một regression **rõ r�
 cd src
 # M5 — eval set v2: điền config/fm_map.yaml (cơ chế tấn công -> mã FM của bạn), rồi build + check
 python -m lab9.evalset --v2 --build          # mỗi FM bị tấn công cần >= 3 item
-# Điền TODO trong config/metric_spec_v2.yaml (slices, pass_hat_5, metric FM-08) và slice_check trong gate.py
+# Spec v2 dùng slices, pass_hat_5, metric FM-08 và slice_check trong gate.py
 python -m lab9.eval --shape swarm --spec config/metric_spec_v2.yaml --out reports/baseline_v2.json
 
 # M6 — nhiễu: cài stats.pass_at_k / pass_hat_k; chọn ngưỡng NGOÀI dải nhiễu A/A
@@ -109,7 +109,6 @@ python -m lab9.mutation --spec config/metric_spec_v2.yaml --baseline reports/bas
 #   exit 0 chỉ khi 3/3 regression bị chặn và 0 báo nhầm (fixed, honest_refactor phải merge)
 
 # M7 — trap: report đã bị "làm đẹp"; lệnh traps tự chạy gate trên từng file
-python -m lab9.eval --shape slice_regression --spec config/metric_spec_v2.yaml --out reports/eval_slice_regression.json
 python -m lab9.traps --pr reports/eval_slice_regression.json --baseline reports/baseline_v2.json --spec config/metric_spec_v2.yaml
 #   exit 0 chỉ khi gate chặn mọi trap; exit 1 = có trap lọt (tên in ở dòng cuối)
 python -m pytest -q -m student -o addopts= -k advanced     # vector công khai; bộ chấm dùng vector ẩn
@@ -134,9 +133,9 @@ Lưu ý: một bug chỉ xuất hiện ở 1/3 seed (`rare`) **không** phát hi
 
 ## Bản đồ file
 ```
-src/lab9/evalset.py   eval set v1 + provenance + check        (TODO M1: failure_modes)
-src/lab9/graders.py   pydantic-evals Evaluators               (TODO M3: 2 grader)
-src/lab9/stats.py     confusion, P/R, kappa, RG, bootstrap    (TODO M2, M4)
+src/lab9/evalset.py   eval set v1 + provenance + check
+src/lab9/graders.py   pydantic-evals Evaluators
+src/lab9/stats.py     confusion, P/R, kappa, RG, bootstrap
 src/lab9/trace_case.py trace → bước sai đầu tiên cho 1 claim@seed (docs/trace_case.md)
 src/lab9/judge.py     calibrate judge từ CSV (replay)
 src/lab9/eval.py      chạy 1 shape → reports/eval_<shape>.json có run_id
@@ -144,7 +143,7 @@ src/lab9/gate.py      PR vs baseline theo metric_spec → exit 0/1
 src/lab9/variants.py  fixed / seeded_regression (+ honest_refactor, slice_, flaky_regression cho v2)
 src/lab9/mutation.py  scorecard: variant công khai qua gate của bạn; --aa = nhiễu A/A   (M5–M7)
 src/lab9/traps.py     sinh report đã bị làm đẹp để thử integrity_check                  (M7)
-src/config/metric_spec_v2.yaml, fm_map.yaml, data/eval/adversarial_v2.json             (TODO M5, M6)
+src/config/metric_spec_v2.yaml, fm_map.yaml, data/eval/adversarial_v2.json
 src/config/metric_spec.yaml   ngưỡng (ratchet: cùng eval-set version chỉ được chặt hơn)
 ```
 Quy tắc: không sửa file `lab8/`; không sửa tay `reports/`; không đặt nhãn inline trong item.

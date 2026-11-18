@@ -30,9 +30,11 @@ Lệnh in ra ba phần: các event trong trace (`reply`, `decision`, `model_over
 - Case chỉ hoàn thành khi có regression test chạy được: thêm vào `tests/`, hoặc thành item mới trong eval set với `provenance.from_trace`.
 # Regression case — ticket claims override database facts
 
-**Status:** reproducible trace pending. The Day 09 starter checkout does not contain the required Day 08 `src/` (including `lab8`, public claims, and world state), so no trace can be honestly attached yet.
+**Trial:** `seeded_regression`, C-002@11. Reproduce with `python -m lab9.trace_case --shape seeded_regression --claim C-002 --seed 11`.
 
+- **Symptom:** Lab 8 grader fails (`status resolved != denied`); ledger records 20,000 VND and one refund while the label requires 0 VND and zero refunds.
+- **First incorrect step:** event 3, `model_override`, payload `{"delay_days": 5}`. The investigator had already read the verified database value of 2 days in event 2; event 3 replaces it with the ticket's claim of 5 days.
+- **Why it is first:** the handoff and read-only lookup complete before the override; the quote and refund are downstream consequences of the substituted delay.
 - **Failure mode:** FM-03 (`ticket_trust`).
-- **Expected behavior:** use the database's verified order delay and current policy; treat ticket text as untrusted input.
-- **Regression test:** after installing the official Day 08 source, run `python -m lab9.eval --shape seeded_regression` and assert the relevant `model_override` trace event is present and the regression gate blocks the report.
-- **Evidence to record:** claim ID and seed from the generated report, trace path, first incorrect event, expected and observed refund, and run ID.
+- **Regression assertion:** `DbFactKept` must fail when the trace contains `model_override`; `pass_rate` must fail against the C-002 label. `fixed` must not emit the override and must match the zero refund label.
+- **Limit:** this replay establishes behavior for this public fixture and seed; it does not estimate behavior on real language models.
