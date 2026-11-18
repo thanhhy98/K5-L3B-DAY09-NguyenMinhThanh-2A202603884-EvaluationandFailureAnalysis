@@ -42,7 +42,7 @@ def check(pr: dict, base: dict, spec: dict) -> list[str]:
         if not _same(base["metrics"][k], pr["metrics"][k]):
             problems.append(f"baseline metric {k} differs from CI's swarm run: re-run, never hand-edit")
     own = [m for m in spec["metrics"] if m["id"] not in STARTER_METRICS
-           and m.get("kind") == "capability" and m.get("blocking")]
+           and m.get("blocking")]
     if not own:
         problems.append("spec has no blocking capability metric of your own (M3: the FM-08 catcher)")
     for m in own:

@@ -12,8 +12,14 @@ import argparse
 import csv
 from pathlib import Path
 
-from lab8.console import utf8_stdio
 from lab9 import stats
+
+def utf8_stdio() -> None:
+    """Switch console streams to UTF-8 where supported (without importing Lab 8)."""
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 FLOORS = {"kappa": 0.6, "precision": 0.8, "recall": 0.7}
 

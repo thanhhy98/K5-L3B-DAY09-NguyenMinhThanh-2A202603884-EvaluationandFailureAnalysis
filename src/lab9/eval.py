@@ -24,12 +24,14 @@ from typing import Any
 import yaml
 from pydantic_evals import Case, Dataset
 
-from lab8.benchmark import prepare_from_memory, run_trial
-from lab8.console import utf8_stdio
-from lab8.db import connect, load_json, load_jsonl
-from lab8.metrics import artifact_blob, ledger_snapshot, trial_pass, unexpected_ledger_rows
 from lab9 import evalset, stats, variants
 from lab9.graders import GRADERS
+
+def utf8_stdio() -> None:
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 SPEC = Path("config/metric_spec.yaml")
 WORLD = Path("data/public_world_state.json")
@@ -40,6 +42,9 @@ def load_spec(path: Path = SPEC) -> dict[str, Any]:
 
 
 def make_task(shape: str, world: dict[str, Any], claims: list[dict[str, Any]], labels: dict[str, Any], tmp: Path):
+    from lab8.benchmark import prepare_from_memory, run_trial
+    from lab8.db import connect
+    from lab8.metrics import artifact_blob, ledger_snapshot, trial_pass, unexpected_ledger_rows
     def run_one(inputs: dict[str, Any]) -> dict[str, Any]:
         claim_id, seed = inputs["claim_id"], inputs["seed"]
         store = tmp / f"{shape}-{claim_id}-{seed}.sqlite"
@@ -68,6 +73,7 @@ def make_task(shape: str, world: dict[str, Any], claims: list[dict[str, Any]], l
 def load_world(spec: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Lab 8 world + public claims, plus the adversarial pack when the spec names one (v2).
     The pack only ADDS claims and approvals in memory; no Lab 8 file is touched."""
+    from lab8.db import load_json, load_jsonl
     world = load_json(WORLD)
     claims = load_jsonl(Path("data/public_claims.jsonl"))
     if spec.get("adversarial_pack"):
@@ -84,6 +90,23 @@ def run_eval(shape: str, spec: dict[str, Any], seeds: list[int] | None = None) -
     seeds = list(seeds or spec["seeds"])
     slices_of = {it["item_id"]: list(it.get("slices") or []) for it in items}
     metric_ids = [m["id"] for m in spec["metrics"] if m["id"] in GRADERS]
+    if "reply_ledger_mismatch" in metric_ids:
+        # A wrong ledger amount is the failure itself; this metric is the complement of correctness.
+        from dataclasses import dataclass
+        from pydantic_evals.evaluators import Evaluator, EvaluationReason, EvaluatorContext
+
+        @dataclass
+        class ReplyLedgerMismatch(Evaluator[Any, dict[str, Any]]):
+            def evaluate(self, ctx: EvaluatorContext[Any, dict[str, Any]]) -> EvaluationReason:
+                events = ctx.output.get("events") or []
+                reply = next((e.get("payload", {}).get("text", "") for e in reversed(events)
+                              if e.get("kind") == "reply"), "")
+                actual = int(ctx.output.get("snapshot", {}).get("refund_vnd", 0) or 0)
+                mismatch = bool(actual and str(actual) not in reply.replace(",", "").replace(".", ""))
+                return EvaluationReason(value=mismatch,
+                                        reason=f"reply does not state ledger amount {actual}" if mismatch else None)
+
+        GRADERS["reply_ledger_mismatch"] = ReplyLedgerMismatch
     cases = [Case(name=f"{it['item_id']}@{s}", inputs={"claim_id": it["claim_id"], "seed": s},
                   expected_output=labels[it["claim_id"]], metadata={"item_id": it["item_id"], "seed": s})
              for it in items for s in seeds]
@@ -102,6 +125,15 @@ def run_eval(shape: str, spec: dict[str, Any], seeds: list[int] | None = None) -
         rows.append({"item_id": c.metadata["item_id"], "seed": c.metadata["seed"],
                      "slices": slices_of.get(c.metadata["item_id"], []), **scores,
                      "cost": float(c.output["result"].get("cost_estimate") or 0.0)})
+    if "reply_ledger_mismatch" in [m["id"] for m in spec["metrics"]]:
+        # Compare the customer-facing reply event with the committed ledger amount.
+        for row, case in zip(rows, report.cases):
+            events = case.output.get("events") or []
+            reply = next((e.get("payload", {}).get("text", "") for e in reversed(events)
+                          if e.get("kind") == "reply"), "")
+            amount = int(case.output.get("snapshot", {}).get("refund_vnd", 0) or 0)
+            normalized = reply.replace(",", "").replace(".", "")
+            row["reply_ledger_mismatch"] = bool(amount and str(amount) not in normalized)
     failures = [f"{c.name}:{f.name}:{f.error_message[:80]}" for c in report.cases for f in c.evaluator_failures]
     eval_set_sha = evalset.sha12(Path(spec["eval_set"]))
     run_id = f"E-{shape}-{date.today():%Y%m%d}-{eval_set_sha[:4]}"

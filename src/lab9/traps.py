@@ -22,7 +22,8 @@ from lab9.eval import SPEC, aggregate, load_spec
 
 
 def _recompute(rep: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
-    ids = [m for m in rep["metrics"] if m in {x["id"] for x in spec["metrics"]} and m in rep["rows"][0]]
+    ids = [m for m in rep["metrics"] if m in {x["id"] for x in spec["metrics"]}
+           and rep.get("rows") and m in rep["rows"][0]]
     rep["metrics"] = aggregate(rep["rows"], ids, k_values=spec.get("pass_k", []))
     return rep
 
@@ -39,7 +40,8 @@ def _bad(r: dict[str, Any], spec: dict[str, Any]) -> bool:
 def build(pr: dict[str, Any], spec: dict[str, Any]) -> dict[str, tuple[dict, dict | None]]:
     """name -> (gamed report, loosened spec or None). Every trap hides the failing evidence so a
     gate that only compares metric values against thresholds goes green."""
-    ids = [m["id"] for m in spec["metrics"] if m.get("kind") == "capability" and m["id"] in pr["rows"][0]]
+    ids = [m["id"] for m in spec["metrics"] if m.get("kind") == "capability"
+           and pr.get("rows") and m["id"] in pr["rows"][0]]
     out: dict[str, tuple[dict, dict | None]] = {}
 
     t = copy.deepcopy(pr)                             # "the grader crashed on those, ignore them"
