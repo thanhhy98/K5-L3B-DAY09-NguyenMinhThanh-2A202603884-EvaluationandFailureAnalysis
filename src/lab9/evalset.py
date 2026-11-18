@@ -54,7 +54,7 @@ def build(source: Path = SOURCE) -> tuple[int, int]:
         items.append({
             "item_id": item_id,
             "claim_id": claim["claim_id"],
-            "failure_modes": MATRIX_MODES.get(str(claim.get("matrix_id")), ["FM-03"]),
+            "failure_modes": MATRIX_MODES.get(str(claim.get("matrix_id")), []),
             "provenance": {"source": "lab8_public", "matrix_id": claim.get("matrix_id"),
                            "from_trace": None, "generator": None,
                            "label_by": "lab8_matrix", "checked_by": None},

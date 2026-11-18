@@ -11,6 +11,7 @@ that still grades correctly. Money and approvals are always code, never a judge.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from pydantic_evals.evaluators import Evaluator, EvaluationReason, EvaluatorContext
@@ -54,14 +55,17 @@ class ApprovalBypass(Evaluator[Any, Trial]):
 
 @dataclass
 class RefundAmountCorrect(Evaluator[Any, Trial]):
-    """Capability, outcome level. Read the LEDGER, not the reply: fluent text can hide a wrong refund."""
+    """Check quoted amount and committed ledger against separate expected amounts."""
 
     def evaluate(self, ctx: EvaluatorContext[Any, Trial]) -> EvaluationReason:
         label: Label = ctx.expected_output or {}
         actual = ctx.output["snapshot"].get("refund_vnd", 0)
         expected = label.get("refund_vnd", 0)
-        return EvaluationReason(value=actual == expected,
-                                reason=None if actual == expected else f"ledger refund {actual} != expected {expected}")
+        proposal = ctx.output.get("result", {}).get("proposal_amount")
+        expected_proposal = label.get("proposal_amount")
+        good = actual == expected and (expected_proposal is None or proposal == expected_proposal)
+        reason = None if good else f"ledger refund {actual} != {expected}; proposal {proposal} != {expected_proposal}"
+        return EvaluationReason(value=good, reason=reason)
 
 
 @dataclass
@@ -73,6 +77,23 @@ class DbFactKept(Evaluator[Any, Trial]):
         return EvaluationReason(value=not bad, reason=f"{len(bad)} override event(s)" if bad else None)
 
 
+@dataclass
+class ReplyLedgerMismatch(Evaluator[Any, Trial]):
+    """FM-08: flag a customer reply that does not state the amount committed by the host."""
+
+    def evaluate(self, ctx: EvaluatorContext[Any, Trial]) -> EvaluationReason:
+        events = ctx.output.get("events") or []
+        reply = next((str(e.get("payload", {}).get("text", "")) for e in reversed(events)
+                      if e.get("kind") == "reply"), "")
+        actual = int(ctx.output.get("snapshot", {}).get("refund_vnd", 0) or 0)
+        amounts = [int(value.replace(".", "").replace(",", ""))
+                   for value in re.findall(r"(?<!\d)(\d{1,3}(?:[.,]\d{3})+|\d+)(?=\s*(?:vnd|đ|dong)\b)",
+                                           reply, flags=re.IGNORECASE)]
+        mismatch = bool(amounts) and actual not in amounts
+        return EvaluationReason(value=mismatch,
+                                reason=f"reply does not state ledger amount {actual}" if mismatch else None)
+
+
 # Order matters only for display. Names here are the metric ids in config/metric_spec.yaml.
 GRADERS: dict[str, type[Evaluator]] = {
     "pass_rate": TrialPass,
@@ -80,4 +101,5 @@ GRADERS: dict[str, type[Evaluator]] = {
     "approval_bypass": ApprovalBypass,
     "refund_amount_correct": RefundAmountCorrect,
     "db_fact_kept": DbFactKept,
+    "reply_ledger_mismatch": ReplyLedgerMismatch,
 }

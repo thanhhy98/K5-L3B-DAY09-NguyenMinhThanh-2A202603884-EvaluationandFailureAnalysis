@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import sys
 import tempfile
 import time
 from datetime import date
@@ -23,6 +24,7 @@ from typing import Any
 
 import yaml
 from pydantic_evals import Case, Dataset
+from pydantic_evals.evaluators import EvaluatorContext
 
 from lab9 import evalset, stats, variants
 from lab9.graders import GRADERS
@@ -90,51 +92,51 @@ def run_eval(shape: str, spec: dict[str, Any], seeds: list[int] | None = None) -
     seeds = list(seeds or spec["seeds"])
     slices_of = {it["item_id"]: list(it.get("slices") or []) for it in items}
     metric_ids = [m["id"] for m in spec["metrics"] if m["id"] in GRADERS]
-    if "reply_ledger_mismatch" in metric_ids:
-        # A wrong ledger amount is the failure itself; this metric is the complement of correctness.
-        from dataclasses import dataclass
-        from pydantic_evals.evaluators import Evaluator, EvaluationReason, EvaluatorContext
-
-        @dataclass
-        class ReplyLedgerMismatch(Evaluator[Any, dict[str, Any]]):
-            def evaluate(self, ctx: EvaluatorContext[Any, dict[str, Any]]) -> EvaluationReason:
-                events = ctx.output.get("events") or []
-                reply = next((e.get("payload", {}).get("text", "") for e in reversed(events)
-                              if e.get("kind") == "reply"), "")
-                actual = int(ctx.output.get("snapshot", {}).get("refund_vnd", 0) or 0)
-                mismatch = bool(actual and str(actual) not in reply.replace(",", "").replace(".", ""))
-                return EvaluationReason(value=mismatch,
-                                        reason=f"reply does not state ledger amount {actual}" if mismatch else None)
-
-        GRADERS["reply_ledger_mismatch"] = ReplyLedgerMismatch
-    cases = [Case(name=f"{it['item_id']}@{s}", inputs={"claim_id": it["claim_id"], "seed": s},
-                  expected_output=labels[it["claim_id"]], metadata={"item_id": it["item_id"], "seed": s})
-             for it in items for s in seeds]
-    dataset = Dataset(name=f"logix-{spec['eval_set_version']}", cases=cases,
-                      evaluators=[GRADERS[m]() for m in metric_ids])
+    evaluators = [(metric, GRADERS[metric]()) for metric in metric_ids]
+    rows, failures = [], []
     with tempfile.TemporaryDirectory(prefix="lab9-eval-", ignore_cleanup_errors=True) as tmp:
-        # max_concurrency=1: shapes write traces/ and SQLite; keep runs deterministic.
-        report = dataset.evaluate_sync(make_task(shape, world, claims, labels, Path(tmp)),
-                                       max_concurrency=1, progress=False)
-    rows = []
-    for c in report.cases:
-        scores = {}
-        for m, g in zip(metric_ids, (GRADERS[m].__name__ for m in metric_ids)):
-            res = c.assertions.get(g)
-            scores[m] = None if res is None else bool(res.value)
-        rows.append({"item_id": c.metadata["item_id"], "seed": c.metadata["seed"],
-                     "slices": slices_of.get(c.metadata["item_id"], []), **scores,
-                     "cost": float(c.output["result"].get("cost_estimate") or 0.0)})
-    if "reply_ledger_mismatch" in [m["id"] for m in spec["metrics"]]:
-        # Compare the customer-facing reply event with the committed ledger amount.
-        for row, case in zip(rows, report.cases):
-            events = case.output.get("events") or []
-            reply = next((e.get("payload", {}).get("text", "") for e in reversed(events)
-                          if e.get("kind") == "reply"), "")
-            amount = int(case.output.get("snapshot", {}).get("refund_vnd", 0) or 0)
-            normalized = reply.replace(",", "").replace(".", "")
-            row["reply_ledger_mismatch"] = bool(amount and str(amount) not in normalized)
-    failures = [f"{c.name}:{f.name}:{f.error_message[:80]}" for c in report.cases for f in c.evaluator_failures]
+        task = make_task(shape, world, claims, labels, Path(tmp))
+        cases = [Case(name=f"{it['item_id']}@{seed}",
+                      inputs={"claim_id": it["claim_id"], "seed": seed},
+                      expected_output=labels[it["claim_id"]],
+                      metadata={"item_id": it["item_id"], "seed": seed})
+                 for it in items for seed in seeds]
+        dataset = Dataset(name=f"logix-{spec['eval_set_version']}", cases=cases,
+                          evaluators=[GRADERS[metric]() for metric in metric_ids])
+        if sys.version_info < (3, 14):
+            # Supported course runtimes use pydantic-evals' Dataset runner.
+            evaluated = dataset.evaluate_sync(task, max_concurrency=1, progress=False)
+            for case in evaluated.cases:
+                scores = {}
+                for metric in metric_ids:
+                    assertion = case.assertions.get(GRADERS[metric].__name__)
+                    scores[metric] = None if assertion is None else bool(assertion.value)
+                rows.append({"item_id": case.metadata["item_id"], "seed": case.metadata["seed"],
+                             "slices": slices_of.get(case.metadata["item_id"], []), **scores,
+                             "cost": float(case.output["result"].get("cost_estimate") or 0.0)})
+                failures.extend(f"{case.name}:{f.name}:{f.error_message[:80]}"
+                                for f in case.evaluator_failures)
+        else:
+            # pydantic-evals 2.68's sync wrapper blocks on Python 3.14. Keep
+            # its Case and Evaluator contracts, evaluating each case directly.
+            for item in items:
+                for seed in seeds:
+                    trial = task({"claim_id": item["claim_id"], "seed": seed})
+                    ctx = EvaluatorContext(name=f"{item['item_id']}@{seed}",
+                                           inputs={"claim_id": item["claim_id"], "seed": seed},
+                                           metadata={"item_id": item["item_id"], "seed": seed},
+                                           expected_output=labels[item["claim_id"]], output=trial,
+                                           duration=0.0, _span_tree=None, attributes={}, metrics={})
+                    scores = {}
+                    for metric, evaluator in evaluators:
+                        try:
+                            scores[metric] = bool(evaluator.evaluate(ctx).value)
+                        except Exception as exc:  # preserve failure evidence; never baseline a crash
+                            scores[metric] = None
+                            failures.append(f"{item['item_id']}@{seed}:{metric}:{type(exc).__name__}:{str(exc)[:80]}")
+                    rows.append({"item_id": item["item_id"], "seed": seed,
+                                 "slices": slices_of.get(item["item_id"], []), **scores,
+                                 "cost": float(trial["result"].get("cost_estimate") or 0.0)})
     eval_set_sha = evalset.sha12(Path(spec["eval_set"]))
     run_id = f"E-{shape}-{date.today():%Y%m%d}-{eval_set_sha[:4]}"
     return {"run_id": run_id, "shape": shape,
@@ -158,7 +160,7 @@ def aggregate(rows: list[dict[str, Any]], metric_ids: list[str], k_values: list[
         by_item.setdefault(r["item_id"], []).append(bool(r.get("pass_rate")))
     out["pass_5"] = round(sum(all(v) for v in by_item.values()) / len(by_item), 4) if by_item else None
     # pass@k / pass^k (M6): mean over items of the unbiased per-item estimate.
-    # Left as None until stats.pass_at_k / stats.pass_hat_k are implemented.
+    # Values are omitted as None only when fewer than k seeds are available.
     for k in k_values:
         for name, fn in (("pass_at", stats.pass_at_k), ("pass_hat", stats.pass_hat_k)):
             if not by_item or min(len(v) for v in by_item.values()) < k:

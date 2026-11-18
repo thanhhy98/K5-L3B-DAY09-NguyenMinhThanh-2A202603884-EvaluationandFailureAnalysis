@@ -26,7 +26,7 @@ def confusion(human: Sequence[str], judge: Sequence[str]) -> dict[str, int]:
 
 
 def precision_recall(human: Sequence[str], judge: Sequence[str]) -> tuple[float, float]:
-    # TODO M2: precision = tp/(tp+fp), recall = tp/(tp+fn); return 0.0 when the denominator is 0
+    """Return precision and recall with FAIL as the positive class."""
     cm = confusion(human, judge)
     pden, rden = cm["tp"] + cm["fp"], cm["tp"] + cm["fn"]
     return (cm["tp"] / pden if pden else 0.0,
